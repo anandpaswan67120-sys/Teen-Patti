@@ -1,626 +1,566 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 
-void main() => runApp(const TeenPattiApp());
+void main() {
+  runApp(const CasinoMasterApp());
+}
 
-class TeenPattiApp extends StatelessWidget {
-  const TeenPattiApp({super.key});
+class CasinoMasterApp extends StatelessWidget {
+  const CasinoMasterApp({super.key});
+
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        debugShowCheckedModeBanner: false,
-        title: 'Teen Patti',
-        theme: ThemeData.dark(useMaterial3: true),
-        home: const GameScreen(),
-      );
-}
-
-// ---------------------------------------------------------------------------
-// MODELS
-// ---------------------------------------------------------------------------
-
-class PCard {
-  final int rank; // 2..14 (14 = Ace)
-  final int suit; // 0 spade, 1 heart, 2 club, 3 diamond
-  const PCard(this.rank, this.suit);
-  String get rankText => const {11: 'J', 12: 'Q', 13: 'K', 14: 'A'}[rank] ?? '$rank';
-  String get suitText => const ['♠', '♥', '♣', '♦'][suit];
-  bool get isRed => suit == 1 || suit == 3;
-}
-
-class HandResult {
-  final int category; // 6 trail, 5 pure seq, 4 seq, 3 flush, 2 pair, 1 high
-  final int score;
-  final String name;
-  const HandResult(this.category, this.score, this.name);
-}
-
-/// Teen Patti hand evaluation. A higher score always means a better hand.
-HandResult evaluate(List<PCard> h) {
-  final r = h.map((c) => c.rank).toList()..sort((a, b) => b - a);
-  final flush = h.every((c) => c.suit == h[0].suit);
-  var seq = false;
-  var seqHigh = r[0];
-  if (r[0] - r[1] == 1 && r[1] - r[2] == 1) {
-    seq = true;
-  } else if (r[0] == 14 && r[1] == 3 && r[2] == 2) {
-    seq = true; // A-2-3 is the lowest sequence
-    seqHigh = 3;
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Royal Teen Patti',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        primarySwatch: Colors.amber,
+        scaffoldBackgroundColor: const Color(0xFF0F172A),
+      ),
+      home: const SplashScreen(),
+    );
   }
-  final tb = r[0] * 225 + r[1] * 15 + r[2];
-  if (r[0] == r[1] && r[1] == r[2]) return HandResult(6, 6000000 + r[0], 'Trail');
-  if (seq && flush) return HandResult(5, 5000000 + seqHigh, 'Pure Sequence');
-  if (seq) return HandResult(4, 4000000 + seqHigh, 'Sequence');
-  if (flush) return HandResult(3, 3000000 + tb, 'Color');
-  if (r[0] == r[1] || r[1] == r[2]) {
-    final kicker = r[0] == r[1] ? r[2] : r[0];
-    return HandResult(2, 2000000 + r[1] * 15 + kicker, 'Pair');
+}
+
+// ----------------- GLOBAL USER STATE -----------------
+class UserData {
+  static String name = "Player";
+  static String avatar = "😎";
+  static double depositBalance = 500.0;
+  static double winningBalance = 1000.0;
+
+  static double get totalBalance => depositBalance + winningBalance;
+
+  static void addDeposit(double amount) {
+    depositBalance += amount;
   }
-  return HandResult(1, 1000000 + tb, 'High Card');
+
+  static bool deductBet(double amount) {
+    if (totalBalance < amount) return false;
+    if (depositBalance >= amount) {
+      depositBalance -= amount;
+    } else {
+      double rem = amount - depositBalance;
+      depositBalance = 0;
+      winningBalance -= rem;
+    }
+    return true;
+  }
+
+  static void addWinnings(double amount) {
+    winningBalance += amount;
+  }
+
+  static bool withdraw(double amount) {
+    if (winningBalance >= amount) {
+      winningBalance -= amount;
+      return true;
+    }
+    return false;
+  }
 }
 
-class Player {
-  String name;
-  final bool isBot;
-  Color color;
-  int chips;
-  List<PCard> cards = [];
-  bool seen = false;
-  bool packed = false;
-  int moves = 0;
-  Player(this.name, this.isBot, this.color, this.chips);
-}
+// ----------------- 1. SPLASH SCREEN -----------------
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
 
-// ---------------------------------------------------------------------------
-// GAME SCREEN
-// ---------------------------------------------------------------------------
-
-class GameScreen extends StatefulWidget {
-  const GameScreen({super.key});
   @override
-  State<GameScreen> createState() => _GameScreenState();
+  State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _GameScreenState extends State<GameScreen> {
-  static const int boot = 50;
-  static const int maxStake = 1600;
-  static const List<Alignment> _seat = [
-    Alignment(0, 0.9),
-    Alignment(-0.95, 0.1),
-    Alignment(-0.5, -0.9),
-    Alignment(0.5, -0.9),
-    Alignment(0.95, 0.1),
-  ];
-
-  final Random rng = Random();
-  final List<Player> players = [
-    Player('आप', false, Colors.teal, 5000),
-    Player('Rohit', true, Colors.deepOrange, 5000),
-    Player('Sneha', true, Colors.pink, 5000),
-    Player('Tanya', true, Colors.purple, 5000),
-    Player('Rahul', true, Colors.blueGrey, 5000),
-  ];
-
-  List<PCard> deck = [];
-  int pot = 0;
-  int stake = boot;
-  int turn = 0;
-  int thinking = -1;
-  int _starter = 0;
-  bool gameOver = false;
-  bool revealAll = false;
-  bool showChip = false;
-  int chipAmt = 0;
-  Alignment chipAlign = Alignment.center;
-  String message = '';
-
+class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _deal();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _runTurn());
-  }
-
-  // ---------------- core helpers ----------------
-
-  List<Player> get _active => players.where((p) => !p.packed).toList();
-
-  int _nextActive(int from) {
-    var i = (from + 1) % players.length;
-    while (players[i].packed) {
-      i = (i + 1) % players.length;
-    }
-    return i;
-  }
-
-  Player _prevActive(Player p) {
-    var i = (players.indexOf(p) - 1 + players.length) % players.length;
-    while (players[i].packed) {
-      i = (i - 1 + players.length) % players.length;
-    }
-    return players[i];
-  }
-
-  int _cost(Player p) => p.seen ? stake * 2 : stake;
-
-  void _pay(Player p, int cost) {
-    final c = min(cost, p.chips);
-    p.chips -= c;
-    pot += c;
-  }
-
-  static const List<String> _namePool = [
-    'Rohit', 'Sneha', 'Tanya', 'Rahul', 'Amit', 'Priya', 'Vikas', 'Pooja',
-    'Sandeep', 'Neha', 'Rajesh', 'Kavita', 'Manoj', 'Anjali', 'Suresh', 'Ritu',
-    'Deepak', 'Simran', 'Arjun', 'Komal', 'Gaurav', 'Meena', 'Sunil', 'Divya',
-    'Ajay', 'Pallavi', 'Vishal', 'Nisha', 'Karan', 'Swati', 'Mukesh', 'Isha',
-    'Pankaj', 'Jyoti', 'Ravi', 'Sonam', 'Nitin', 'Shweta', 'Ashok', 'Payal',
-  ];
-  static const List<Color> _colorPool = [
-    Colors.deepOrange, Colors.pink, Colors.purple, Colors.blueGrey,
-    Colors.indigo, Colors.brown, Colors.cyan, Colors.deepPurple,
-    Colors.green, Colors.red, Colors.orange, Colors.blue,
-  ];
-  List<String> _lastNames = [];
-
-  /// Gives the 4 bots brand new names every game (no repeat of the last game)
-  void _assignBotNames() {
-    final pool = _namePool.where((n) => !_lastNames.contains(n)).toList()..shuffle(rng);
-    final colors = [..._colorPool]..shuffle(rng);
-    for (int i = 1; i < players.length; i++) {
-      players[i].name = pool[i - 1];
-      players[i].color = colors[i - 1];
-    }
-    _lastNames = pool.take(4).toList();
-  }
-
-  void _deal() {
-    _assignBotNames();
-    deck = [
-      for (int s = 0; s < 4; s++)
-        for (int r = 2; r <= 14; r++) PCard(r, s)
-    ]..shuffle(rng);
-    pot = 0;
-    stake = boot;
-    gameOver = false;
-    revealAll = false;
-    showChip = false;
-    chipAlign = Alignment.center;
-    thinking = -1;
-    for (final p in players) {
-      if (p.chips < boot * 10) p.chips = 5000; // free refill
-      p.cards = [deck.removeLast(), deck.removeLast(), deck.removeLast()];
-      p.seen = false;
-      p.packed = false;
-      p.moves = 0;
-      p.chips -= boot;
-      pot += boot;
-    }
-    turn = _starter % players.length;
-    _starter++;
-    message = 'खेल शुरू हुआ! Boot ₹$boot';
-  }
-
-  void _newGame() {
-    setState(_deal);
-    _runTurn();
-  }
-
-  // ---------------- turn flow ----------------
-
-  Future<void> _runTurn() async {
-    if (gameOver || !mounted) return;
-    final idx = turn;
-    final p = players[idx];
-    if (!p.isBot) {
-      setState(() {
-        thinking = -1;
-        message = 'आपकी बारी है';
-      });
-      return;
-    }
-    setState(() => thinking = idx);
-    // Bots "think" for 2 to 4 seconds like a real person
-    await Future.delayed(Duration(milliseconds: 2000 + rng.nextInt(2001)));
-    if (!mounted || gameOver || turn != idx) return;
-    _botAct(p);
-  }
-
-  void _endTurn() {
-    final act = _active;
-    if (act.length == 1) {
-      _win(act.first);
-      return;
-    }
-    setState(() => turn = _nextActive(turn));
-    _runTurn();
-  }
-
-  void _botAct(Player p) {
-    // A blind bot may decide to look at its cards after a round or two
-    if (!p.seen && p.moves >= 1 && rng.nextDouble() < 0.3 + 0.2 * p.moves) {
-      setState(() => p.seen = true);
-    }
-    final res = evaluate(p.cards);
-    final activeCount = _active.length;
-
-    if (p.chips < _cost(p)) {
-      _pack(p);
-      return;
-    }
-
-    if (p.seen) {
-      var packChance = 0.0;
-      if (res.category == 1) {
-        packChance = p.moves < 1 ? 0.1 : 0.25 + 0.2 * p.moves;
-      } else if (res.category == 2) {
-        packChance = p.moves >= 4 ? 0.2 : 0.03;
-      }
-      if (stake >= 200 && res.category <= 2) packChance += 0.3;
-      if (rng.nextDouble() < packChance) {
-        _pack(p);
-        return;
-      }
-    } else if (stake >= 100 && rng.nextDouble() < 0.15) {
-      _pack(p);
-      return;
-    }
-
-    // Show when only two players are left
-    if (activeCount == 2 && p.moves >= 2 && p.seen && (res.category >= 3 || rng.nextDouble() < 0.15)) {
-      _show(p);
-      return;
-    }
-
-    // Side show (bots only ask another bot)
-    if (p.seen && activeCount >= 3 && p.moves >= 2 && res.category >= 3) {
-      final prev = _prevActive(p);
-      if (prev.isBot && prev.seen && rng.nextDouble() < 0.2) {
-        _sideShow(p);
-        return;
-      }
-    }
-
-    var raise = false;
-    if (p.seen && res.category >= 4) {
-      raise = rng.nextDouble() < 0.4;
-    } else if (p.seen && res.category == 3) {
-      raise = rng.nextDouble() < 0.2;
-    } else if (!p.seen) {
-      raise = rng.nextDouble() < 0.1;
-    }
-    _bet(p, raise);
-  }
-
-  // ---------------- actions ----------------
-
-  void _bet(Player p, bool raise) {
-    setState(() {
-      if (raise && stake * 2 <= maxStake) stake *= 2;
-      final cost = _cost(p);
-      _pay(p, cost);
-      p.moves++;
-      message = '${p.name} ने ${p.seen ? "चाल" : "ब्लाइंड"} चली ₹$cost';
+    Timer(const Duration(seconds: 2), () {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+      );
     });
-    _endTurn();
   }
 
-  void _pack(Player p) {
-    setState(() {
-      p.packed = true;
-      message = '${p.name} ने पैक किया';
-    });
-    _endTurn();
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainContentAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const RadialGradient(colors: [Colors.amber, Colors.deepOrange]),
+                boxShadow: [BoxShadow(color: Colors.amber.withOpacity(0.5), blurRadius: 30)],
+              ),
+              child: const Icon(Icons.casino, size: 80, color: Colors.white),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              "ROYAL TEEN PATTI",
+              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.amber, letterSpacing: 2),
+            ),
+            const SizedBox(height: 10),
+            const Text("Loading Table...", style: TextStyle(color: Colors.white70)),
+          ],
+        ),
+      ),
+    );
   }
+}
 
-  void _show(Player p) {
-    final other = _active.firstWhere((x) => x != p);
-    _pay(p, _cost(p));
-    p.moves++;
-    final a = evaluate(p.cards).score;
-    final b = evaluate(other.cards).score;
-    final winner = a > b ? p : other; // on a tie the player who asked loses
-    final loser = winner == p ? other : p;
-    loser.packed = true;
-    message = 'शो! ${winner.name} के कार्ड बड़े निकले';
-    _win(winner, reveal: true);
-  }
+// ----------------- 2. LOGIN / REGISTER SCREEN -----------------
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
 
-  Future<void> _sideShow(Player req) async {
-    final prev = _prevActive(req);
-    _pay(req, _cost(req));
-    req.moves++;
-    final accept = !prev.isBot ||
-        rng.nextDouble() < (evaluate(prev.cards).category >= 4 ? 0.25 : 0.75);
-    if (!accept) {
-      setState(() => message = '${prev.name} ने साइड शो मना कर दिया');
-      _endTurn();
-      return;
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final TextEditingController _nameController = TextEditingController(text: "Anand");
+  String _selectedAvatar = "🦁";
+  final List<String> avatars = ["🦁", "😎", "👑", "🚀", "🐯", "💎"];
+
+  void _login() {
+    if (_nameController.text.trim().isNotEmpty) {
+      UserData.name = _nameController.text.trim();
+      UserData.avatar = _selectedAvatar;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const MainLobbyScreen()),
+      );
     }
-    final a = evaluate(req.cards).score;
-    final b = evaluate(prev.cards).score;
-    final loser = a > b ? prev : req; // tie: requester loses
-    if (!req.isBot) {
-      await showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('साइड शो'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            for (final p in [req, prev]) ...[
-              Text(p.name),
-              Row(mainAxisAlignment: MainAxisAlignment.center, children: p.cards.map((c) => _face(c, 44)).toList()),
-              const SizedBox(height: 8),
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainContentAxisAlignment.center,
+            children: [
+              const Text("Welcome Player", style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.amber)),
+              const SizedBox(height: 20),
+              Wrap(
+                spacing: 12,
+                children: avatars.map((a) {
+                  return GestureDetector(
+                    onTap: () => setState(() => _selectedAvatar = a),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _selectedAvatar == a ? Colors.amber : Colors.grey[800],
+                        border: Border.all(color: Colors.amberAccent, width: _selectedAvatar == a ? 3 : 1),
+                      ),
+                      child: Text(a, style: const TextStyle(fontSize: 28)),
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 25),
+              TextField(
+                controller: _nameController,
+                decoration: InputDecoration(
+                  labelText: "Your Nickname",
+                  prefixIcon: const Icon(Icons.person, color: Colors.amber),
+                  filled: true,
+                  fillColor: const Color(0xFF1E293B),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 25),
+              ElevatedButton(
+                onPressed: _login,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.amber,
+                  foregroundColor: Colors.black,
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text("Enter Lobby", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
             ],
-            Text('${loser.name} हार गया'),
-          ]),
-          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('ठीक है'))],
-        ),
-      );
-    }
-    if (!mounted) return;
-    setState(() {
-      loser.packed = true;
-      message = 'साइड शो: ${loser.name} हार गया';
-    });
-    _endTurn();
-  }
-
-  Future<void> _win(Player w, {bool reveal = false}) async {
-    final amt = pot;
-    setState(() {
-      gameOver = true;
-      revealAll = reveal;
-      thinking = -1;
-      chipAmt = amt;
-      showChip = true;
-      chipAlign = Alignment.center;
-      message = w.isBot ? '${w.name} जीता ₹$amt' : 'आप जीत गए! ₹$amt';
-    });
-    await Future.delayed(const Duration(milliseconds: 300));
-    if (!mounted) return;
-    setState(() => chipAlign = _seat[players.indexOf(w)]);
-    await Future.delayed(const Duration(milliseconds: 1200));
-    if (!mounted) return;
-    setState(() {
-      w.chips += amt;
-      pot = 0;
-      showChip = false;
-      chipAlign = Alignment.center;
-    });
-  }
-
-  // ---------------- UI pieces ----------------
-
-  Widget _face(PCard c, double w) => Container(
-        width: w,
-        height: w * 1.4,
-        margin: const EdgeInsets.all(2),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.black26),
-        ),
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Text(c.rankText,
-              style: TextStyle(fontSize: w * 0.38, fontWeight: FontWeight.bold, color: c.isRed ? Colors.red : Colors.black)),
-          Text(c.suitText, style: TextStyle(fontSize: w * 0.34, color: c.isRed ? Colors.red : Colors.black)),
-        ]),
-      );
-
-  Widget _back(double w) => Container(
-        width: w,
-        height: w * 1.4,
-        margin: const EdgeInsets.all(2),
-        decoration: BoxDecoration(
-          color: Colors.indigo.shade800,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.white, width: 1.5),
-        ),
-      );
-
-  Widget _tag(Player p) {
-    final String t = p.packed ? 'पैक' : (p.seen ? 'देखा' : 'ब्लाइंड');
-    final Color c = p.packed ? Colors.grey : (p.seen ? Colors.blue : Colors.orange);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-      decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(8)),
-      child: Text(t, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-    );
-  }
-
-  Widget _chipsText(Player p) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
-        child: Text('₹${p.chips}', style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold)),
-      );
-
-  Widget _botSeat(int i) {
-    final p = players[i];
-    final active = turn == i && !gameOver;
-    final reveal = revealAll && !p.packed;
-    return Opacity(
-      opacity: p.packed ? 0.5 : 1,
-      child: SizedBox(
-        width: 100,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          _tag(p),
-          const SizedBox(height: 2),
-          Container(
-            padding: const EdgeInsets.all(2),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: active ? Colors.amber : Colors.white24, width: 3),
-            ),
-            child: CircleAvatar(
-              radius: 24,
-              backgroundColor: p.color,
-              child: Text(p.name[0], style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            ),
           ),
-          Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-          _chipsText(p),
-          const SizedBox(height: 2),
-          if (!p.packed)
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: p.cards.map((c) => reveal ? _face(c, 26) : _back(16)).toList(),
-            ),
-          if (thinking == i) const Text('सोच रहा है...', style: TextStyle(fontSize: 10, color: Colors.amberAccent)),
-        ]),
+        ),
       ),
     );
   }
+}
 
-  Widget _userSeat() {
-    final u = players[0];
-    final show = u.seen || revealAll;
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      Row(
-        mainAxisSize: MainAxisSize.min,
-        children: u.cards.map((c) => show ? _face(c, 58) : _back(58)).toList(),
-      ),
-      const SizedBox(height: 4),
-      Row(mainAxisSize: MainAxisSize.min, children: [
-        _chipsText(u),
-        const SizedBox(width: 10),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: u.seen ? Colors.blue : Colors.orange,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            visualDensity: VisualDensity.compact,
-          ),
-          onPressed: (u.seen || u.packed || gameOver) ? null : () => setState(() => u.seen = true),
-          child: Text(u.packed ? 'पैक' : (u.seen ? 'देखा ✓' : 'ब्लाइंड - कार्ड देखें')),
-        ),
-      ]),
-      if (u.seen && !u.packed)
-        Text(evaluate(u.cards).name, style: const TextStyle(color: Colors.amberAccent, fontSize: 12)),
-    ]);
+// ----------------- 3. MAIN LOBBY SCREEN -----------------
+class MainLobbyScreen extends StatefulWidget {
+  const MainLobbyScreen({super.key});
+
+  @override
+  State<MainLobbyScreen> createState() => _MainLobbyScreenState();
+}
+
+class _MainLobbyScreenState extends State<MainLobbyScreen> {
+  void _openWallet() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const WalletScreen()),
+    ).then((_) => setState(() {}));
   }
 
-  Widget _center() => Column(mainAxisSize: MainAxisSize.min, children: [
-        const CircleAvatar(radius: 22, backgroundColor: Colors.black45, child: Icon(Icons.support_agent, size: 28)),
-        const Text('डीलर', style: TextStyle(fontSize: 11)),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.black54,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.amber),
+  void _claimDailyBonus() {
+    setState(() {
+      UserData.addDeposit(200);
+    });
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        title: const Text("🎉 Daily Reward!", style: TextStyle(color: Colors.amber)),
+        content: const Text("Aapke wallet me ₹200 bonus chips add kar diye gaye hain!"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("OK", style: TextStyle(color: Colors.amber)),
           ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.monetization_on, color: Colors.amber, size: 18),
-            const SizedBox(width: 4),
-            Text('पॉट ₹$pot', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
-          ]),
-        ),
-        const SizedBox(height: 4),
-        Text('Stake ₹$stake', style: const TextStyle(fontSize: 11, color: Colors.white70)),
-      ]);
-
-  Widget _btn(String t, Color c, VoidCallback? f) => Expanded(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 2),
-          child: ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: c,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 12),
-            ),
-            onPressed: f,
-            child: Text(t, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-          ),
-        ),
-      );
-
-  Widget _controls() {
-    if (gameOver) {
-      return Padding(
-        padding: const EdgeInsets.all(8),
-        child: SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green, padding: const EdgeInsets.all(14)),
-            onPressed: showChip ? null : _newGame,
-            child: const Text('नया खेल', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          ),
-        ),
-      );
-    }
-    final u = players[0];
-    final my = turn == 0 && !u.packed;
-    final cost = _cost(u);
-    final newStake = min(stake * 2, maxStake);
-    final cost2 = u.seen ? newStake * 2 : newStake;
-    final canRaise = stake * 2 <= maxStake && u.chips >= cost2;
-    final act = _active;
-    final canSide = act.length >= 3 && u.seen && _prevActive(u).seen && u.chips >= cost;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
-      child: Row(children: [
-        _btn('पैक', Colors.red.shade700, my ? () => _pack(u) : null),
-        _btn('चाल\n₹$cost', Colors.green.shade700, (my && u.chips >= cost) ? () => _bet(u, false) : null),
-        _btn('2x चाल\n₹$cost2', Colors.teal.shade700, (my && canRaise) ? () => _bet(u, true) : null),
-        _btn('साइड शो', Colors.indigo, (my && canSide) ? () => _sideShow(u) : null),
-        _btn('शो', Colors.orange.shade800, (my && act.length == 2 && u.chips >= cost) ? () => _show(u) : null),
-      ]),
+        ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFF5A0A0A), Color(0xFF2B0505)],
-          ),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF1E293B),
+        elevation: 0,
+        title: Row(
+          children: [
+            CircleAvatar(backgroundColor: Colors.amber, child: Text(UserData.avatar, style: const TextStyle(fontSize: 20))),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(UserData.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                Text("₹ ${UserData.totalBalance.toStringAsFixed(0)}", style: const TextStyle(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ],
         ),
-        child: SafeArea(
-          child: Column(children: [
-            Expanded(
-              child: Container(
-                margin: const EdgeInsets.fromLTRB(6, 6, 6, 0),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(120),
-                  border: Border.all(color: Colors.amber.shade700, width: 5),
-                  gradient: const RadialGradient(
-                    colors: [Color(0xFF1E8E3E), Color(0xFF0B4D1F)],
-                    radius: 0.9,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.card_giftcard, color: Colors.amber),
+            tooltip: "Daily Bonus",
+            onPressed: _claimDailyBonus,
+          ),
+          IconButton(
+            icon: const Icon(Icons.account_balance_wallet, color: Colors.amber),
+            tooltip: "Wallet",
+            onPressed: _openWallet,
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [Colors.deepPurple, Colors.indigo]),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("Royal Casino", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 5),
+                      Text("Total Chips: ₹${UserData.totalBalance.toStringAsFixed(0)}", style: const TextStyle(color: Colors.amberAccent)),
+                    ],
                   ),
-                ),
-                child: Stack(children: [
-                  Align(alignment: Alignment.center, child: _center()),
-                  for (int i = 1; i < players.length; i++) Align(alignment: _seat[i], child: _botSeat(i)),
-                  Align(alignment: _seat[0], child: _userSeat()),
-                  IgnorePointer(
-                    child: AnimatedAlign(
-                      duration: const Duration(milliseconds: 1000),
-                      curve: Curves.easeInOut,
-                      alignment: chipAlign,
-                      child: showChip
-                          ? Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: const BoxDecoration(color: Colors.amber, shape: BoxShape.circle),
-                              child: Text('₹$chipAmt',
-                                  style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                            )
-                          : const SizedBox.shrink(),
-                    ),
+                  ElevatedButton(
+                    onPressed: _openWallet,
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+                    child: const Text("+ Add Cash"),
                   ),
-                ]),
+                ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(message, style: const TextStyle(color: Colors.white, fontSize: 14)),
+            const SizedBox(height: 25),
+            const Text("Popular Games", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
+            const SizedBox(height: 15),
+
+            // Game 1: Teen Patti
+            _buildGameCard(
+              title: "Realistic Teen Patti",
+              subtitle: "5 Players Live Table | Classic Rules",
+              icon: Icons.style,
+              color: Colors.redAccent,
+              onTap: () {
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const TeenPattiGameScreen())).then((_) => setState(() {}));
+              },
             ),
-            _controls(),
-          ]),
+
+            // Game 2: Dragon vs Tiger
+            _buildGameCard(
+              title: "Dragon vs Tiger",
+              subtitle: "Instant 1 Card Showdown | Fast Win",
+              icon: Icons.flash_on,
+              color: Colors.orangeAccent,
+              onTap: () {
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const DragonTigerGameScreen())).then((_) => setState(() {}));
+              },
+            ),
+
+            // Game 3: Andar Bahar
+            _buildGameCard(
+              title: "Andar Bahar",
+              subtitle: "Joker Match Game | 50-50 Chance",
+              icon: Icons.swap_horiz,
+              color: Colors.teal,
+              onTap: () {
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const AndarBaharGameScreen())).then((_) => setState(() {}));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGameCard({required String title, required String subtitle, required IconData icon, required Color color, required VoidCallback onTap}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 15),
+      child: Material(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
+                  child: Icon(icon, color: color, size: 36),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 4),
+                      Text(subtitle, style: const TextStyle(fontSize: 13, color: Colors.white60)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.play_circle_fill, color: Colors.amber, size: 36),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 }
+
+// ----------------- 4. WALLET & PAYMENT SCREEN -----------------
+class WalletScreen extends StatefulWidget {
+  const WalletScreen({super.key});
+
+  @override
+  State<WalletScreen> createState() => _WalletScreenState();
+}
+
+class _WalletScreenState extends State<WalletScreen> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  final TextEditingController _amountController = TextEditingController(text: "500");
+  final TextEditingController _withdrawAmount = TextEditingController();
+  final TextEditingController _upiController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  void _addMoney(double amount) {
+    setState(() {
+      UserData.addDeposit(amount);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("₹$amount successfully added via UPI!"), backgroundColor: Colors.green),
+    );
+  }
+
+  void _withdrawMoney() {
+    double amt = double.tryParse(_withdrawAmount.text.trim()) ?? 0;
+    if (amt <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Valid amount dalein!"), backgroundColor: Colors.red));
+      return;
+    }
+    if (_upiController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("UPI ID ya Bank detail dalein!"), backgroundColor: Colors.red));
+      return;
+    }
+    if (UserData.winningBalance < amt) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Winning balance insufficient hai!"), backgroundColor: Colors.red));
+      return;
+    }
+
+    setState(() {
+      UserData.withdraw(amt);
+    });
+    _withdrawAmount.clear();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        title: const Text("✅ Withdrawal Placed", style: TextStyle(color: Colors.greenAccent)),
+        content: Text("₹$amt aapke diye gaye UPI account me transfer kar diya jayega."),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK", style: TextStyle(color: Colors.amber)))],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("My Wallet"),
+        backgroundColor: const Color(0xFF1E293B),
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: Colors.amber,
+          tabs: const [Tab(text: "Add Cash"), Tab(text: "Withdraw")],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          // Tab 1: Add Cash
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("Deposit Balance: ₹${UserData.depositBalance.toStringAsFixed(0)}", style: const TextStyle(fontSize: 18, color: Colors.amberAccent)),
+                const SizedBox(height: 20),
+                Wrap(
+                  spacing: 12,
+                  children: [100, 500, 1000, 2000].map((val) {
+                    return ElevatedButton(
+                      onPressed: () => _addMoney(val.toDouble()),
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E293B)),
+                      child: Text("+ ₹$val", style: const TextStyle(color: Colors.amber)),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 25),
+                TextField(
+                  controller: _amountController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: "Custom Amount (₹)", filled: true, fillColor: Color(0xFF1E293B)),
+                ),
+                const SizedBox(height: 25),
+                ElevatedButton(
+                  onPressed: () {
+                    double amt = double.tryParse(_amountController.text.trim()) ?? 0;
+                    if (amt > 0) _addMoney(amt);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    minimumSize: const Size(double.infinity, 48),
+                  ),
+                  child: const Text("Pay via UPI / GPay / PhonePe", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+
+          // Tab 2: Withdraw
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("Winnings Balance: ₹${UserData.winningBalance.toStringAsFixed(0)}", style: const TextStyle(fontSize: 18, color: Colors.greenAccent)),
+                const SizedBox(height: 5),
+                const Text("Sirf Winning balance withdraw kiya ja sakta hai.", style: TextStyle(color: Colors.white54, fontSize: 13)),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: _withdrawAmount,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: "Withdrawal Amount (₹)", filled: true, fillColor: Color(0xFF1E293B)),
+                ),
+                const SizedBox(height: 15),
+                TextField(
+                  controller: _upiController,
+                  decoration: const InputDecoration(labelText: "UPI ID / Account Number", filled: true, fillColor: Color(0xFF1E293B)),
+                ),
+                const SizedBox(height: 25),
+                ElevatedButton(
+                  onPressed: _withdrawMoney,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber,
+                    foregroundColor: Colors.black,
+                    minimumSize: const Size(double.infinity, 48),
+                  ),
+                  child: const Text("Request Instant Withdrawal", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ----------------- 5. REALISTIC TEEN PATTI SCREEN -----------------
+class TeenPattiGameScreen extends StatefulWidget {
+  const TeenPattiGameScreen({super.key});
+
+  @override
+  State<TeenPattiGameScreen> createState() => _TeenPattiGameScreenState();
+}
+
+class PlayerModel {
+  final String name;
+  final String avatar;
+  double balance;
+  bool isBot;
+  bool isPacked;
+  bool isSeen;
+  List<String> cards;
+
+  PlayerModel({
+    required this.name,
+    required this.avatar,
+    required this.balance,
+    required this.isBot,
+    this.isPacked = false,
+    this.isSeen = false,
+    required this.cards,
+  });
+}
+
+class _TeenPattiGameScreenState extends State<TeenPattiGameScreen> {
+  double potAmount = 0;
+  double currentChaal = 20;
+  int turnIndex = 0; // 0 is User, 1..4 are Bots
+  String gameStatus = "Game Started! Chaal chaliye.";
+  bool gameOver = false;
+
+  late List<PlayerModel> players;
+
+  final List<Strin
