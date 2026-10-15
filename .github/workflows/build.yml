@@ -23,18 +23,19 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          cache: true
 
       - name: Create project and build
         run: |
           flutter create --org com.teenpatti app
           cd app
-          flutter pub add shared_preferences
           cp ../main.dart lib/main.dart
-          flutter build apk --release
+          flutter pub get
+          flutter build apk --debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: teenpatti-apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          name: Royal-Teen-Patti-APK
+          path: app/build/app/outputs/flutter-apk/app-debug.apk
           
